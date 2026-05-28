@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clean Block Clicker</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: monospace;
+            background: #ffffff;
+            color: #000000;
+            height: 100vh;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        .click-world {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
+        .display-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            max-width: 90vw; /* Prevents overflow from breaking window walls instantly */
+        }
+
+        .sub-display {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .number-row {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap; /* Allows block numbers to row-wrap cleanly if screen fills */
+            justify-content: center;
+        }
+
+        .digit-matrix {
+            display: grid;
+            grid-template-columns: repeat(3, 12px);
+            grid-template-rows: repeat(5, 12px);
+            gap: 0px;
+        }
+
+        .digit-matrix.small {
+            grid-template-columns: repeat(3, 6px);
+            grid-template-rows: repeat(5, 6px);
+        }
+
+        .pixel {
+            width: 100%;
+            height: 100%;
+            background: transparent;
+        }
+        .pixel.filled {
+            background: #000000;
+        }
+
+        .label { 
+            font-size: 0.8rem;
+            font-weight: bold;
+            letter-spacing: 1px;
+            text-align: center;
+            text-transform: uppercase;
+        }
+
+        .bottom-left-panel {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: #ffffff;
+            padding: 12px;
+            border: 4px solid #000000;
+            z-index: 100;
+        }
+
+        .stat-title {
+            font-size: 0.85rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+        }
+
+        .shop {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        button {
+            background: #000000;
+            color: #ffffff;
+            border: 3px solid #000000;
+            padding: 6px 10px;
+            cursor: pointer;
+            font-family: monospace;
+            font-weight: bold;
+            font-size: 0.75rem;
+            text-align: left;
+            text-transform: uppercase;
+        }
+        
+        button:hover:not(:disabled) {
+            background: #ffffff;
+            color: #000000;
+        }
+
+        button:disabled { 
+            background: #e0e0e0;
+            border-color: #cccccc;
+            color: #999999;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="click-world" id="main-click-zone">
+        <div class="display-group">
+            <div class="sub-display">
+                <div class="label">GLOBAL AUTOS SPEED</div>
+                <div class="number-row" id="small-autos-container"></div>
+            </div>
+            <div class="number-row" id="large-clicks-container"></div>
+            <div class="label">CLICK ANYWHERE TO BUILD BLOCKS</div>
+        </div>
+    </div>
+
+    <div class="bottom-left-panel" id="ui-panel">
+        <div class="stat-title">YOUR CLICKS: <span id="stat-clicks">0</span></div>
+        <div class="stat-title">YOUR POWER: +<span id="stat-power">0</span>/S</div>
+        <div class="shop">
+            <button id="buy-local" disabled>BUY LOCAL AUTO (+1/S) | COST: 10</button>
+            <button id="buy-local-mega" disabled>BUY MEGA LOCAL (+10/S) | COST: 150</button>
+            <button id="buy-global" disabled>BUY GLOBAL AUTO (+1/S) | COST: 50</button>
+            <button id="buy-global-mega" disabled>BUY MEGA GLOBAL (+10/S) | COST: 500</button>
+        </div>
+    </div>
+
+    <script>
+        const FONT_MAP = {
+            0: [1,1,1, 1,0,1, 1,0,1, 1,0,1, 1,1,1],
+            1: [0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0],
+            2: [1,1,1, 0,0,1, 1,1,1, 1,0,0, 1,1,1],
+            3: [1,1,1, 0,0,1, 1,1,1, 0,0,1, 1,1,1],
+            4: [1,0,1, 1,0,1, 1,1,1, 0,0,1, 0,0,1],
+            5: [1,1,1, 1,0,0, 1,1,1, 0,0,1, 1,1,1],
+            6: [1,1,1, 1,0,0, 1,1,1, 1,0,1, 1,1,1],
+            7: [1,1,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1],
+            8: [1,1,1, 1,0,1, 1,1,1, 1,0,1, 1,1,1],
+            9: [1,1,1, 1,0,1, 1,1,1, 0,0,1, 1,1,1]
+        };
+
+        const publicRoomKey = "solid_block_sync_v11";
+        const channelSub = new WebSocket(`wss://pubsub.best/sub/${publicRoomKey}`);
+        const channelPub = new WebSocket(`wss://pubsub.best/pub/${publicRoomKey}`);
+
+        // Flat Costs Setup
+        const COST_LOCAL = 10;
+        const COST_LOCAL_MEGA = 150;
+        const COST_GLOBAL = 50;
+        const COST_GLOBAL_MEGA = 500;
+
+        let localState = {
+            clicks: parseFloat(localStorage.getItem('sb_clicks')) || 0,
+            autoClickers: parseInt(localStorage.getItem('sb_autos')) || 0,
+            megaClickers: parseInt(localStorage.getItem('sb_megas')) || 0
+        };
+
+        let globalScore = parseFloat(localStorage.getItem('sb_g_score')) || 0;
+        let globalAutosCount = parseInt(localStorage.getItem('sb_g_autos')) || 0;
+
+        const largeContainer = document.getElementById('large-clicks-container');
+        const smallContainer = document.getElementById('small-autos-container');
+        const mainZone = document.getElementById('main-click-zone');
+        const uiPanel = document.getElementById('ui-panel');
+        const statClicks = document.getElementById('stat-clicks');
+        const statPower = document.getElementById('stat-power');
+        
+        const btnLocal = document.getElementById('buy-local');
+        const btnLocalMega = document.getElementById('buy-local-mega');
+        const btnGlobal = document.getElementById('buy-global');
+        const btnGlobalMega = document.getElementById('buy-global-mega');
+
+        function calculateOfflineProgress() {
+            const now = Date.now();
+            const lastSavedTime = parseInt(localStorage.getItem('sb_last_time'));
+
+            if (lastSavedTime) {
+                const totalSecondsOffline = (now - lastSavedTime) / 1000;
+                
+                const totalLocalDPS = localState.autoClickers + (localState.megaClickers * 10);
+                if (totalLocalDPS > 0) {
+                    localState.clicks += totalSecondsOffline * totalLocalDPS;
+                }
+                if (globalAutosCount > 0) {
+                    globalScore += totalSecondsOffline * globalAutosCount;
+                }
+            }
+            save();
+        }
+
+        function save() {
+            localStorage.setItem('sb_clicks', localState.clicks);
+            localStorage.setItem('sb_autos', localState.autoClickers);
+            localStorage.setItem('sb_megas', localState.megaClickers);
+            localStorage.setItem('sb_g_score', globalScore);
+            localStorage.setItem('sb_g_autos', globalAutosCount);
+            localStorage.setItem('sb_last_time', Date.now());
+        }
+
+        function drawBlocks(targetContainer, value, isSmall) {
+            targetContainer.innerHTML = '';
+            const digits = Math.floor(value).toString().split('');
+            
+            digits.forEach(digit => {
+                const matrixData = FONT_MAP[digit] || FONT_MAP[0];
+                const matrixEl = document.createElement('div');
+                matrixEl.className = 'digit-matrix' + (isSmall ? ' small' : '');
+                
+                matrixData.forEach(pixelValue => {
+                    const pixel = document.createElement('div');
+                    pixel.className = 'pixel' + (pixelValue === 1 ? ' filled' : '');
+                    matrixEl.appendChild(pixel);
+                });
+                targetContainer.appendChild(matrixEl);
+            });
+        }
+
+        function render() {
+            drawBlocks(largeContainer, globalScore, false);
+            drawBlocks(smallContainer, globalAutosCount, true);
+            
+            statClicks.textContent = Math.floor(localState.clicks);
+            statPower.textContent = localState.autoClickers + (localState.megaClickers * 10);
+
+            btnLocal.disabled = localState.clicks < COST_LOCAL;
+            btnLocalMega.disabled = localState.clicks < COST_LOCAL_MEGA;
+            btnGlobal.disabled = localState.clicks < COST_GLOBAL;
+            btnGlobalMega.disabled = localState.clicks < COST_GLOBAL_MEGA;
+        }
+
+        function transmit() {
+            if (channelPub.readyState === WebSocket.OPEN) {
+                channelPub.send(JSON.stringify({
+                    score: globalScore,
+                    globalAutos: globalAutosCount
+                }));
+            }
+        }
+
+        mainZone.addEventListener('click', () => {
+            localState.clicks += 1;
+            globalScore += 1;
+            save();
+            render();
+            transmit();
+        });
+
+        uiPanel.addEventListener('click', (e) => e.stopPropagation());
+
+        // Purchase Actions
+        btnLocal.addEventListener('click', () => {
+            if (localState.clicks >= COST_LOCAL) {
+                localState.clicks -= COST_LOCAL;
+                localState.autoClickers += 1;
+                save(); render();
+            }
+        });
+
+        btnLocalMega.addEventListener('click', () => {
+            if (localState.clicks >= COST_LOCAL_MEGA) {
+                localState.clicks -= COST_LOCAL_MEGA;
+                localState.megaClickers += 1;
+                save(); render();
+            }
+        });
+
+        btnGlobal.addEventListener('click', () => {
+            if (localState.clicks >= COST_GLOBAL) {
+                localState.clicks -= COST_GLOBAL;
+                globalAutosCount += 1;
+                save(); render(); transmit();
+            }
+        });
+
+        btnGlobalMega.addEventListener('click', () => {
+            if (localState.clicks >= COST_GLOBAL_MEGA) {
+                localState.clicks -= COST_GLOBAL_MEGA;
+                globalAutosCount += 10;
+                save(); render(); transmit();
+            }
+        });
+
+        // Frame update ticking loops
+        setInterval(() => {
+            const localDPS = localState.autoClickers + (localState.megaClickers * 10);
+            if (localDPS > 0) localState.clicks += (localDPS * 0.1);
+            if (globalAutosCount > 0) globalScore += (globalAutosCount * 0.1);
+            save();
+            render();
+        }, 100);
+
+        setInterval(transmit, 2000);
+
+        channelSub.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.score > globalScore) globalScore = data.score;
+                if (data.globalAutos > globalAutosCount) globalAutosCount = data.globalAutos;
+                save();
+                render();
+            } catch (e) {}
+        };
+
+        calculateOfflineProgress();
+        render();
+    </script>
+</body>
+</html>
