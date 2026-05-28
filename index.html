@@ -193,7 +193,6 @@
         const COST_GLOBAL = 50;
         const COST_GLOBAL_MEGA = 500;
 
-        // Secure state loader with error fallback
         function loadLocalState() {
             try {
                 return {
@@ -224,19 +223,26 @@
         const btnGlobal = document.getElementById('buy-global');
         const btnGlobalMega = document.getElementById('buy-global-mega');
 
+        // FIXED CLOUD ENGINE: Math handles background accumulation automatically without a running bot
         globalRef.on('value', (snapshot) => {
             const data = snapshot.val();
+            const now = Date.now();
+            
             if (data) {
+                globalAutosCount = data.globalAutos || 0;
+                const lastSavedTimestamp = data.lastTime || now;
+                const elapsedSecondsGlobal = (now - lastSavedTimestamp) / 1000;
+                
+                // Catch up what the global autos made since the last database update
+                let calculatedGlobal = (data.score || 0);
+                if (elapsedSecondsGlobal > 0 && globalAutosCount > 0) {
+                    calculatedGlobal += (elapsedSecondsGlobal * globalAutosCount);
+                }
+
                 if (!loadedFirstTime) {
-                    const now = Date.now();
+                    globalScore = calculatedGlobal;
                     
-                    // 1. Calculate Global Offline Progress
-                    const lastSavedTimestamp = data.lastTime || now;
-                    const elapsedSecondsGlobal = (now - lastSavedTimestamp) / 1000;
-                    globalAutosCount = data.globalAutos || 0;
-                    globalScore = (data.score || 0) + (elapsedSecondsGlobal > 0 ? elapsedSecondsGlobal * globalAutosCount * 0.1 : 0);
-                    
-                    // 2. Calculate Local Offline Progress
+                    // Local Catchup
                     const elapsedSecondsLocal = (now - localState.lastSavedTime) / 1000;
                     const localDPS = localState.autoClickers + (localState.megaClickers * 10);
                     if (elapsedSecondsLocal > 0 && localDPS > 0) {
@@ -246,8 +252,8 @@
                     loadedFirstTime = true;
                     saveLocal();
                 } else {
-                    if (data.score > globalScore) globalScore = data.score;
-                    if (data.globalAutos > globalAutosCount) globalAutosCount = data.globalAutos;
+                    // Smoothly pull data from cloud updates
+                    if (calculatedGlobal > globalScore) globalScore = calculatedGlobal;
                 }
                 render();
             } else {
@@ -262,7 +268,7 @@
                 score: globalScore,
                 globalAutos: globalAutosCount,
                 lastTime: Date.now()
-            }).catch(e => console.log("Offline - Cloud sync queued"));
+            });
         }
 
         function saveLocal() {
@@ -271,20 +277,16 @@
                 localStorage.setItem('fb_autos', localState.autoClickers);
                 localStorage.setItem('fb_megas', localState.megaClickers);
                 localStorage.setItem('fb_last_time', Date.now());
-            } catch(e) {
-                console.log("Local storage is restricted by your browser settings.");
-            }
+            } catch(e) {}
         }
 
         function drawBlocks(targetContainer, value, isSmall) {
             targetContainer.innerHTML = '';
             const digits = Math.floor(value).toString().split('');
-            
             digits.forEach(digit => {
                 const matrixData = FONT_MAP[digit] || FONT_MAP[0];
                 const matrixEl = document.createElement('div');
                 matrixEl.className = 'digit-matrix' + (isSmall ? ' small' : '');
-                
                 matrixData.forEach(pixelValue => {
                     const pixel = document.createElement('div');
                     pixel.className = 'pixel' + (pixelValue === 1 ? ' filled' : '');
@@ -297,7 +299,6 @@
         function render() {
             drawBlocks(largeContainer, globalScore, false);
             drawBlocks(smallContainer, globalAutosCount, true);
-            
             statClicks.textContent = Math.floor(localState.clicks);
             statPower.textContent = localState.autoClickers + (localState.megaClickers * 10);
 
@@ -307,11 +308,8 @@
             btnGlobalMega.disabled = localState.clicks < COST_GLOBAL_MEGA;
         }
 
-        // Main background click handler
         mainZone.addEventListener('click', (e) => {
-            // CRITICAL FIX: Ensure clicking on UI panel elements doesn't register as a world-click
             if (uiPanel.contains(e.target)) return;
-
             localState.clicks += 1;
             globalScore += 1;
             saveLocal();
@@ -319,10 +317,7 @@
             pushToFirebase();
         });
 
-        // Completely stop button events from bleeding backward into the main screen
-        uiPanel.addEventListener('click', (e) => {
-            e.stopPropagation();
-        });
+        uiPanel.addEventListener('click', (e) => e.stopPropagation());
 
         btnLocal.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -362,7 +357,7 @@
             }
         });
 
-        // 100ms precise loop
+        // Loop runs locally to increment scores step-by-step while page is actively open
         setInterval(() => {
             const localDPS = localState.autoClickers + (localState.megaClickers * 10);
             if (localDPS > 0) localState.clicks += (localDPS * 0.1);
@@ -371,7 +366,7 @@
             render();
         }, 100);
 
-        // 3-second database push
+        // Keep database timestamp strictly up to date
         setInterval(() => {
             pushToFirebase();
         }, 3000);
