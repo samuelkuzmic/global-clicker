@@ -161,19 +161,16 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
 
     <script>
-        // =========================================================
-        // FILL IN YOUR REMAINING FIREBASE KEYS BELOW
-        // =========================================================
+        // Your live backend connection configuration
         const firebaseConfig = {
-            apiKey: "PASTE_YOUR_API_KEY_HERE",
+            apiKey: "AIzaSyBqUs5TFAHF8nqjib5TGi6fkCk9LJMRC5o",
             authDomain: "global-clicker-7730d.firebaseapp.com",
             databaseURL: "https://global-clicker-7730d-default-rtdb.firebaseio.com",
             projectId: "global-clicker-7730d",
-            storageBucket: "global-clicker-7730d.appspot.com",
-            messagingSenderId: "PASTE_YOUR_MESSAGING_SENDER_ID_HERE",
-            appId: "PASTE_YOUR_APP_ID_HERE"
+            storageBucket: "global-clicker-7730d.firebasestorage.app",
+            messagingSenderId: "344054134607",
+            appId: "1:344054134607:web:39e9fe0428324124eb773a"
         };
-        // =========================================================
 
         // Initialize Firebase Engines
         firebase.initializeApp(firebaseConfig);
@@ -220,7 +217,7 @@
         const btnGlobal = document.getElementById('buy-global');
         const btnGlobalMega = document.getElementById('buy-global-mega');
 
-        // Watch database updates live
+        // Listen for real-time cloud data modifications
         globalRef.on('value', (snapshot) => {
             const data = snapshot.val();
             if (data) {
@@ -230,7 +227,7 @@
                     const elapsedSeconds = (now - lastSavedTimestamp) / 1000;
                     
                     globalAutosCount = data.globalAutos || 0;
-                    // Catch-up math for when nobody was online
+                    // Offline progress catching algorithms
                     globalScore = (data.score || 0) + (elapsedSeconds > 0 ? elapsedSeconds * globalAutosCount * 0.1 : 0);
                     loadedFirstTime = true;
                 } else {
@@ -333,7 +330,7 @@
             }
         });
 
-        // 100ms game ticking engine
+        // 100ms internal clock step engine loop
         setInterval(() => {
             const localDPS = localState.autoClickers + (localState.megaClickers * 10);
             if (localDPS > 0) localState.clicks += (localDPS * 0.1);
@@ -342,7 +339,7 @@
             render();
         }, 100);
 
-        // Update timestamps on database for offline calculation safety
+        // Background synchronization database updates (every 3 seconds)
         setInterval(() => {
             if (loadedFirstTime) {
                 pushToFirebase();
