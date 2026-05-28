@@ -35,7 +35,7 @@
             flex-direction: column;
             align-items: center;
             gap: 20px;
-            max-width: 90vw; /* Prevents overflow from breaking window walls instantly */
+            max-width: 90vw;
         }
 
         .sub-display {
@@ -48,7 +48,7 @@
         .number-row {
             display: flex;
             gap: 4px;
-            flex-wrap: wrap; /* Allows block numbers to row-wrap cleanly if screen fills */
+            flex-wrap: wrap;
             justify-content: center;
         }
 
@@ -171,11 +171,9 @@
             9: [1,1,1, 1,0,1, 1,1,1, 0,0,1, 1,1,1]
         };
 
-        const publicRoomKey = "solid_block_sync_v11";
-        const channelSub = new WebSocket(`wss://pubsub.best/sub/${publicRoomKey}`);
-        const channelPub = new WebSocket(`wss://pubsub.best/pub/${publicRoomKey}`);
+        // Uses a free public cloud key storage vault. Change the string below if you ever want a private channel.
+        const DB_URL = "https://kvdb.io/MN8WzG5ySskX9eD927Eghb/global_block_state_v12";
 
-        // Flat Costs Setup
         const COST_LOCAL = 10;
         const COST_LOCAL_MEGA = 150;
         const COST_GLOBAL = 50;
@@ -187,8 +185,9 @@
             megaClickers: parseInt(localStorage.getItem('sb_megas')) || 0
         };
 
-        let globalScore = parseFloat(localStorage.getItem('sb_g_score')) || 0;
-        let globalAutosCount = parseInt(localStorage.getItem('sb_g_autos')) || 0;
+        let globalScore = 0;
+        let globalAutosCount = 0;
+        let lastCloudSaveTime = Date.now();
 
         const largeContainer = document.getElementById('large-clicks-container');
         const smallContainer = document.getElementById('small-autos-container');
@@ -202,31 +201,47 @@
         const btnGlobal = document.getElementById('buy-global');
         const btnGlobalMega = document.getElementById('buy-global-mega');
 
-        function calculateOfflineProgress() {
-            const now = Date.now();
-            const lastSavedTime = parseInt(localStorage.getItem('sb_last_time'));
-
-            if (lastSavedTime) {
-                const totalSecondsOffline = (now - lastSavedTime) / 1000;
-                
-                const totalLocalDPS = localState.autoClickers + (localState.megaClickers * 10);
-                if (totalLocalDPS > 0) {
-                    localState.clicks += totalSecondsOffline * totalLocalDPS;
+        // Cloud Retrieval: Pull numbers directly out of the public database file
+        async function fetchFromCloud() {
+            try {
+                const response = await fetch(DB_URL);
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // Offline Math: Calculate passive data accumulated while everyone was closed
+                    const now = Date.now();
+                    const offlineSeconds = (now - data.lastTime) / 1000;
+                    
+                    globalAutosCount = data.globalAutos || 0;
+                    globalScore = (data.score || 0) + (offlineSeconds > 0 ? offlineSeconds * globalAutosCount * 0.1 : 0);
+                    lastCloudSaveTime = now;
+                    render();
                 }
-                if (globalAutosCount > 0) {
-                    globalScore += totalSecondsOffline * globalAutosCount;
-                }
+            } catch (e) {
+                console.log("Cloud read pending...");
             }
-            save();
         }
 
-        function save() {
+        // Cloud Storage: Push updates seamlessly to the public database file
+        async function saveToCloud() {
+            try {
+                await fetch(DB_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        score: globalScore,
+                        globalAutos: globalAutosCount,
+                        lastTime: Date.now()
+                    })
+                });
+            } catch (e) {
+                console.log("Cloud write pending...");
+            }
+        }
+
+        function saveLocal() {
             localStorage.setItem('sb_clicks', localState.clicks);
             localStorage.setItem('sb_autos', localState.autoClickers);
             localStorage.setItem('sb_megas', localState.megaClickers);
-            localStorage.setItem('sb_g_score', globalScore);
-            localStorage.setItem('sb_g_autos', globalAutosCount);
-            localStorage.setItem('sb_last_time', Date.now());
         }
 
         function drawBlocks(targetContainer, value, isSmall) {
@@ -260,31 +275,20 @@
             btnGlobalMega.disabled = localState.clicks < COST_GLOBAL_MEGA;
         }
 
-        function transmit() {
-            if (channelPub.readyState === WebSocket.OPEN) {
-                channelPub.send(JSON.stringify({
-                    score: globalScore,
-                    globalAutos: globalAutosCount
-                }));
-            }
-        }
-
         mainZone.addEventListener('click', () => {
             localState.clicks += 1;
             globalScore += 1;
-            save();
+            saveLocal();
             render();
-            transmit();
         });
 
         uiPanel.addEventListener('click', (e) => e.stopPropagation());
 
-        // Purchase Actions
         btnLocal.addEventListener('click', () => {
             if (localState.clicks >= COST_LOCAL) {
                 localState.clicks -= COST_LOCAL;
                 localState.autoClickers += 1;
-                save(); render();
+                saveLocal(); render();
             }
         });
 
@@ -292,7 +296,7 @@
             if (localState.clicks >= COST_LOCAL_MEGA) {
                 localState.clicks -= COST_LOCAL_MEGA;
                 localState.megaClickers += 1;
-                save(); render();
+                saveLocal(); render();
             }
         });
 
@@ -300,7 +304,8 @@
             if (localState.clicks >= COST_GLOBAL) {
                 localState.clicks -= COST_GLOBAL;
                 globalAutosCount += 1;
-                save(); render(); transmit();
+                saveLocal(); render();
+                saveToCloud();
             }
         });
 
@@ -308,33 +313,28 @@
             if (localState.clicks >= COST_GLOBAL_MEGA) {
                 localState.clicks -= COST_GLOBAL_MEGA;
                 globalAutosCount += 10;
-                save(); render(); transmit();
+                saveLocal(); render();
+                saveToCloud();
             }
         });
 
-        // Frame update ticking loops
+        // 100ms Core loop for screen processing
         setInterval(() => {
             const localDPS = localState.autoClickers + (localState.megaClickers * 10);
             if (localDPS > 0) localState.clicks += (localDPS * 0.1);
             if (globalAutosCount > 0) globalScore += (globalAutosCount * 0.1);
-            save();
+            saveLocal();
             render();
         }, 100);
 
-        setInterval(transmit, 2000);
+        // Periodically download updates from alternative computers (every 3.5 seconds)
+        setInterval(fetchFromCloud, 3500);
 
-        channelSub.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                if (data.score > globalScore) globalScore = data.score;
-                if (data.globalAutos > globalAutosCount) globalAutosCount = data.globalAutos;
-                save();
-                render();
-            } catch (e) {}
-        };
+        // Periodically back up local progress to the cloud file (every 5 seconds)
+        setInterval(saveToCloud, 5000);
 
-        calculateOfflineProgress();
-        render();
+        // Initialize directly from online progress
+        fetchFromCloud().then(() => render());
     </script>
 </body>
 </html>
