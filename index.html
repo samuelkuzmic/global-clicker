@@ -171,8 +171,10 @@
             9: [1,1,1, 1,0,1, 1,1,1, 0,0,1, 1,1,1]
         };
 
-        // Uses a free public cloud key storage vault. Change the string below if you ever want a private channel.
-        const DB_URL = "https://kvdb.io/MN8WzG5ySskX9eD927Eghb/global_block_state_v12";
+        // Connect directly to a free public mesh channel that links all browser tabs globally
+        const meshRoomId = "minecraft_p2p_block_room_v14";
+        const listenSocket = new WebSocket(`wss://pubsub.best/sub/${meshRoomId}`);
+        const sendSocket = new WebSocket(`wss://pubsub.best/pub/${meshRoomId}`);
 
         const COST_LOCAL = 10;
         const COST_LOCAL_MEGA = 150;
@@ -180,14 +182,14 @@
         const COST_GLOBAL_MEGA = 500;
 
         let localState = {
-            clicks: parseFloat(localStorage.getItem('sb_clicks')) || 0,
-            autoClickers: parseInt(localStorage.getItem('sb_autos')) || 0,
-            megaClickers: parseInt(localStorage.getItem('sb_megas')) || 0
+            clicks: parseFloat(localStorage.getItem('p2p_clicks')) || 0,
+            autoClickers: parseInt(localStorage.getItem('p2p_autos')) || 0,
+            megaClickers: parseInt(localStorage.getItem('p2p_megas')) || 0
         };
 
-        let globalScore = 0;
-        let globalAutosCount = 0;
-        let lastCloudSaveTime = Date.now();
+        // Fallback loading: Grabs the highest recorded local save value automatically
+        let globalScore = parseFloat(localStorage.getItem('p2p_g_score')) || 0;
+        let globalAutosCount = parseInt(localStorage.getItem('p2p_g_autos')) || 0;
 
         const largeContainer = document.getElementById('large-clicks-container');
         const smallContainer = document.getElementById('small-autos-container');
@@ -201,47 +203,36 @@
         const btnGlobal = document.getElementById('buy-global');
         const btnGlobalMega = document.getElementById('buy-global-mega');
 
-        // Cloud Retrieval: Pull numbers directly out of the public database file
-        async function fetchFromCloud() {
-            try {
-                const response = await fetch(DB_URL);
-                if (response.ok) {
-                    const data = await response.json();
-                    
-                    // Offline Math: Calculate passive data accumulated while everyone was closed
-                    const now = Date.now();
-                    const offlineSeconds = (now - data.lastTime) / 1000;
-                    
-                    globalAutosCount = data.globalAutos || 0;
-                    globalScore = (data.score || 0) + (offlineSeconds > 0 ? offlineSeconds * globalAutosCount * 0.1 : 0);
-                    lastCloudSaveTime = now;
-                    render();
-                }
-            } catch (e) {
-                console.log("Cloud read pending...");
+        // Checks for offline generation math based on structural timestamps
+        function handleOfflineProgress() {
+            const now = Date.now();
+            const lastTime = parseInt(localStorage.getItem('p2p_last_time'));
+            if (lastTime) {
+                const elapsedSeconds = (now - lastTime) / 1000;
+                const localDPS = localState.autoClickers + (localState.megaClickers * 10);
+                
+                if (localDPS > 0) localState.clicks += elapsedSeconds * localDPS;
+                if (globalAutosCount > 0) globalScore += elapsedSeconds * globalAutosCount * 0.1;
             }
+            saveAll();
         }
 
-        // Cloud Storage: Push updates seamlessly to the public database file
-        async function saveToCloud() {
-            try {
-                await fetch(DB_URL, {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        score: globalScore,
-                        globalAutos: globalAutosCount,
-                        lastTime: Date.now()
-                    })
-                });
-            } catch (e) {
-                console.log("Cloud write pending...");
-            }
+        function saveAll() {
+            localStorage.setItem('p2p_clicks', localState.clicks);
+            localStorage.setItem('p2p_autos', localState.autoClickers);
+            localStorage.setItem('p2p_megas', localState.megaClickers);
+            localStorage.setItem('p2p_g_score', globalScore);
+            localStorage.setItem('p2p_g_autos', globalAutosCount);
+            localStorage.setItem('p2p_last_time', Date.now());
         }
 
-        function saveLocal() {
-            localStorage.setItem('sb_clicks', localState.clicks);
-            localStorage.setItem('sb_autos', localState.autoClickers);
-            localStorage.setItem('sb_megas', localState.megaClickers);
+        function sendNetworkUpdate() {
+            if (sendSocket.readyState === WebSocket.OPEN) {
+                sendSocket.send(JSON.stringify({
+                    score: globalScore,
+                    globalAutos: globalAutosCount
+                }));
+            }
         }
 
         function drawBlocks(targetContainer, value, isSmall) {
@@ -278,8 +269,9 @@
         mainZone.addEventListener('click', () => {
             localState.clicks += 1;
             globalScore += 1;
-            saveLocal();
+            saveAll();
             render();
+            sendNetworkUpdate();
         });
 
         uiPanel.addEventListener('click', (e) => e.stopPropagation());
@@ -288,7 +280,7 @@
             if (localState.clicks >= COST_LOCAL) {
                 localState.clicks -= COST_LOCAL;
                 localState.autoClickers += 1;
-                saveLocal(); render();
+                saveAll(); render();
             }
         });
 
@@ -296,7 +288,7 @@
             if (localState.clicks >= COST_LOCAL_MEGA) {
                 localState.clicks -= COST_LOCAL_MEGA;
                 localState.megaClickers += 1;
-                saveLocal(); render();
+                saveAll(); render();
             }
         });
 
@@ -304,8 +296,8 @@
             if (localState.clicks >= COST_GLOBAL) {
                 localState.clicks -= COST_GLOBAL;
                 globalAutosCount += 1;
-                saveLocal(); render();
-                saveToCloud();
+                saveAll(); render();
+                sendNetworkUpdate();
             }
         });
 
@@ -313,28 +305,37 @@
             if (localState.clicks >= COST_GLOBAL_MEGA) {
                 localState.clicks -= COST_GLOBAL_MEGA;
                 globalAutosCount += 10;
-                saveLocal(); render();
-                saveToCloud();
+                saveAll(); render();
+                sendNetworkUpdate();
             }
         });
 
-        // 100ms Core loop for screen processing
+        // 100ms internal clock engine loop
         setInterval(() => {
             const localDPS = localState.autoClickers + (localState.megaClickers * 10);
             if (localDPS > 0) localState.clicks += (localDPS * 0.1);
             if (globalAutosCount > 0) globalScore += (globalAutosCount * 0.1);
-            saveLocal();
+            saveAll();
             render();
         }, 100);
 
-        // Periodically download updates from alternative computers (every 3.5 seconds)
-        setInterval(fetchFromCloud, 3500);
+        // Broadcast local presence to any other matching links every 2 seconds
+        setInterval(sendNetworkUpdate, 2000);
 
-        // Periodically back up local progress to the cloud file (every 5 seconds)
-        setInterval(saveToCloud, 5000);
+        // Catch packets fired by other live computers on your GitHub link
+        listenSocket.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                // Mesh Reconciliation: Keep whatever number is objectively highest
+                if (data.score > globalScore) globalScore = data.score;
+                if (data.globalAutos > globalAutosCount) globalAutosCount = data.globalAutos;
+                saveAll();
+                render();
+            } catch (e) {}
+        };
 
-        // Initialize directly from online progress
-        fetchFromCloud().then(() => render());
+        handleOfflineProgress();
+        render();
     </script>
 </body>
 </html>
