@@ -150,10 +150,10 @@
         <div class="stat-title">YOUR CLICKS: <span id="stat-clicks">0</span></div>
         <div class="stat-title">YOUR POWER: +<span id="stat-power">0</span>/S</div>
         <div class="shop">
-            <button id="buy-local" disabled>BUY LOCAL AUTO (+1/S) | COST: 10</button>
-            <button id="buy-local-mega" disabled>BUY MEGA LOCAL (+10/S) | COST: 150</button>
-            <button id="buy-global" disabled>BUY GLOBAL AUTO (+1/S) | COST: 50</button>
-            <button id="buy-global-mega" disabled>BUY MEGA GLOBAL (+10/S) | COST: 500</button>
+            <button id="buy-local">BUY LOCAL AUTO (+1/S) | COST: 10</button>
+            <button id="buy-local-mega">BUY MEGA LOCAL (+10/S) | COST: 150</button>
+            <button id="buy-global">BUY GLOBAL AUTO (+1/S) | COST: 50</button>
+            <button id="buy-global-mega">BUY MEGA GLOBAL (+10/S) | COST: 500</button>
         </div>
     </div>
 
@@ -161,7 +161,6 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
 
     <script>
-        // Your live backend connection configuration
         const firebaseConfig = {
             apiKey: "AIzaSyBqUs5TFAHF8nqjib5TGi6fkCk9LJMRC5o",
             authDomain: "global-clicker-7730d.firebaseapp.com",
@@ -172,7 +171,6 @@
             appId: "1:344054134607:web:39e9fe0428324124eb773a"
         };
 
-        // Initialize Firebase Engines
         firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
         const globalRef = database.ref("global_game_state");
@@ -195,12 +193,21 @@
         const COST_GLOBAL = 50;
         const COST_GLOBAL_MEGA = 500;
 
-        let localState = {
-            clicks: parseFloat(localStorage.getItem('fb_clicks')) || 0,
-            autoClickers: parseInt(localStorage.getItem('fb_autos')) || 0,
-            megaClickers: parseInt(localStorage.getItem('fb_megas')) || 0
-        };
+        // Secure state loader with error fallback
+        function loadLocalState() {
+            try {
+                return {
+                    clicks: parseFloat(localStorage.getItem('fb_clicks')) || 0,
+                    autoClickers: parseInt(localStorage.getItem('fb_autos')) || 0,
+                    megaClickers: parseInt(localStorage.getItem('fb_megas')) || 0,
+                    lastSavedTime: parseInt(localStorage.getItem('fb_last_time')) || Date.now()
+                };
+            } catch(e) {
+                return { clicks: 0, autoClickers: 0, megaClickers: 0, lastSavedTime: Date.now() };
+            }
+        }
 
+        let localState = loadLocalState();
         let globalScore = 0;
         let globalAutosCount = 0;
         let loadedFirstTime = false;
@@ -217,19 +224,27 @@
         const btnGlobal = document.getElementById('buy-global');
         const btnGlobalMega = document.getElementById('buy-global-mega');
 
-        // Listen for real-time cloud data modifications
         globalRef.on('value', (snapshot) => {
             const data = snapshot.val();
             if (data) {
                 if (!loadedFirstTime) {
                     const now = Date.now();
-                    const lastSavedTimestamp = data.lastTime || now;
-                    const elapsedSeconds = (now - lastSavedTimestamp) / 1000;
                     
+                    // 1. Calculate Global Offline Progress
+                    const lastSavedTimestamp = data.lastTime || now;
+                    const elapsedSecondsGlobal = (now - lastSavedTimestamp) / 1000;
                     globalAutosCount = data.globalAutos || 0;
-                    // Offline progress catching algorithms
-                    globalScore = (data.score || 0) + (elapsedSeconds > 0 ? elapsedSeconds * globalAutosCount * 0.1 : 0);
+                    globalScore = (data.score || 0) + (elapsedSecondsGlobal > 0 ? elapsedSecondsGlobal * globalAutosCount * 0.1 : 0);
+                    
+                    // 2. Calculate Local Offline Progress
+                    const elapsedSecondsLocal = (now - localState.lastSavedTime) / 1000;
+                    const localDPS = localState.autoClickers + (localState.megaClickers * 10);
+                    if (elapsedSecondsLocal > 0 && localDPS > 0) {
+                        localState.clicks += (elapsedSecondsLocal * localDPS);
+                    }
+                    
                     loadedFirstTime = true;
+                    saveLocal();
                 } else {
                     if (data.score > globalScore) globalScore = data.score;
                     if (data.globalAutos > globalAutosCount) globalAutosCount = data.globalAutos;
@@ -242,17 +257,23 @@
         });
 
         function pushToFirebase() {
+            if(!loadedFirstTime) return;
             globalRef.set({
                 score: globalScore,
                 globalAutos: globalAutosCount,
                 lastTime: Date.now()
-            });
+            }).catch(e => console.log("Offline - Cloud sync queued"));
         }
 
         function saveLocal() {
-            localStorage.setItem('fb_clicks', localState.clicks);
-            localStorage.setItem('fb_autos', localState.autoClickers);
-            localStorage.setItem('fb_megas', localState.megaClickers);
+            try {
+                localStorage.setItem('fb_clicks', localState.clicks);
+                localStorage.setItem('fb_autos', localState.autoClickers);
+                localStorage.setItem('fb_megas', localState.megaClickers);
+                localStorage.setItem('fb_last_time', Date.now());
+            } catch(e) {
+                console.log("Local storage is restricted by your browser settings.");
+            }
         }
 
         function drawBlocks(targetContainer, value, isSmall) {
@@ -286,7 +307,11 @@
             btnGlobalMega.disabled = localState.clicks < COST_GLOBAL_MEGA;
         }
 
-        mainZone.addEventListener('click', () => {
+        // Main background click handler
+        mainZone.addEventListener('click', (e) => {
+            // CRITICAL FIX: Ensure clicking on UI panel elements doesn't register as a world-click
+            if (uiPanel.contains(e.target)) return;
+
             localState.clicks += 1;
             globalScore += 1;
             saveLocal();
@@ -294,9 +319,13 @@
             pushToFirebase();
         });
 
-        uiPanel.addEventListener('click', (e) => e.stopPropagation());
+        // Completely stop button events from bleeding backward into the main screen
+        uiPanel.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
 
-        btnLocal.addEventListener('click', () => {
+        btnLocal.addEventListener('click', (e) => {
+            e.stopPropagation();
             if (localState.clicks >= COST_LOCAL) {
                 localState.clicks -= COST_LOCAL;
                 localState.autoClickers += 1;
@@ -304,7 +333,8 @@
             }
         });
 
-        btnLocalMega.addEventListener('click', () => {
+        btnLocalMega.addEventListener('click', (e) => {
+            e.stopPropagation();
             if (localState.clicks >= COST_LOCAL_MEGA) {
                 localState.clicks -= COST_LOCAL_MEGA;
                 localState.megaClickers += 1;
@@ -312,7 +342,8 @@
             }
         });
 
-        btnGlobal.addEventListener('click', () => {
+        btnGlobal.addEventListener('click', (e) => {
+            e.stopPropagation();
             if (localState.clicks >= COST_GLOBAL) {
                 localState.clicks -= COST_GLOBAL;
                 globalAutosCount += 1;
@@ -321,7 +352,8 @@
             }
         });
 
-        btnGlobalMega.addEventListener('click', () => {
+        btnGlobalMega.addEventListener('click', (e) => {
+            e.stopPropagation();
             if (localState.clicks >= COST_GLOBAL_MEGA) {
                 localState.clicks -= COST_GLOBAL_MEGA;
                 globalAutosCount += 10;
@@ -330,7 +362,7 @@
             }
         });
 
-        // 100ms internal clock step engine loop
+        // 100ms precise loop
         setInterval(() => {
             const localDPS = localState.autoClickers + (localState.megaClickers * 10);
             if (localDPS > 0) localState.clicks += (localDPS * 0.1);
@@ -339,11 +371,9 @@
             render();
         }, 100);
 
-        // Background synchronization database updates (every 3 seconds)
+        // 3-second database push
         setInterval(() => {
-            if (loadedFirstTime) {
-                pushToFirebase();
-            }
+            pushToFirebase();
         }, 3000);
 
         render();
